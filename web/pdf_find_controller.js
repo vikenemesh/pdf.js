@@ -17,6 +17,8 @@
 
 'use strict';
 
+var DIVIDER_TERMS = ' '; // Divider for multiterm search
+
 var FindStates = {
   FIND_FOUND: 0,
   FIND_NOTFOUND: 1,
@@ -39,6 +41,7 @@ var PDFFindController = (function PDFFindControllerClosure() {
     this.active = false; // If active, find results will be highlighted.
     this.pageContents = []; // Stores the text for each page.
     this.pageMatches = [];
+    this.pageMatchesLength = [];
     this.selected = { // Currently selected match.
       pageIdx: -1,
       matchIdx: -1
@@ -77,7 +80,8 @@ var PDFFindController = (function PDFFindControllerClosure() {
       'find',
       'findagain',
       'findhighlightallchange',
-      'findcasesensitivitychange'
+      'findcasesensitivitychange',
+      'findphrasesearchchange'
     ];
 
     this.firstPagePromise = new Promise(function (resolve) {
@@ -108,11 +112,67 @@ var PDFFindController = (function PDFFindControllerClosure() {
       });
     },
 
+    // Helper for multiple search.
+    // Sorting array of objects { match: <match>, matchLength: <matchLength> }
+    // in increasing index first and then the lengths.
+    sortMatches: function PDFFindController_sortMatches(matchesWithLength) {
+      matchesWithLength.sort(function(a, b) {
+        return a.match === b.match ?
+          a.matchLength - b.matchLength : a.match - b.match;
+        });
+    },
+
+    // Helper for multiple search - for cases when one search term
+    // include another search term (for example, "tamed tame").
+    // Looking for the same elements in the 'matches' and
+    // leave elements with a longer match-length.
+    // Example - before:
+    // matches       1 2 2 2 5 7
+    // matchesLength 4 4 5 6 3 2
+    // After:
+    // matches       1 2 5 7
+    // matchesLength 4 6 3 2
+    clearMatches: function PDFFindController_clearMatches(
+        matchesWithLength, matches, matchesLength) {
+      var i, len;
+      this.sortMatches(matchesWithLength);
+      for (i = 0, len = matchesWithLength.length; i < len; i++) {
+        if (matchesWithLength[i + 1] !== undefined &&
+            matchesWithLength[i].match === matchesWithLength[i + 1].match) {
+          continue;
+        }
+        matches.push(matchesWithLength[i].match);
+        matchesLength.push(matchesWithLength[i].matchLength);
+      }
+    },
+
     calcFindMatch: function PDFFindController_calcFindMatch(pageIndex) {
       var pageContent = this.normalize(this.pageContents[pageIndex]);
       var query = this.normalize(this.state.query);
       var caseSensitive = this.state.caseSensitive;
+      var phraseSearch = this.state.phraseSearch;
       var queryLen = query.length;
+      var matches = [], matchesLength = [], matchesWithLength;
+
+      function addMatches(query) {
+        if (query === '') {
+          return;
+        }
+        var queryLen = query.length;
+        var matchIdx = -queryLen;
+        while (true) {
+          matchIdx = pageContent.indexOf(query, matchIdx + queryLen);
+          if (matchIdx === -1) {
+            return;
+          }
+          if (!phraseSearch) {
+            matchesWithLength.push({ match: matchIdx, matchLength: queryLen });
+          } else {
+            matches.push(matchIdx);
+            matchesLength.push(queryLen);
+          }
+        }
+      }
 
       if (queryLen === 0) {
         return; // Do nothing: the matches should be wiped out already.
@@ -123,16 +183,17 @@ var PDFFindController = (function PDFFindControllerClosure() {
         query = query.toLowerCase();
       }
 
-      var matches = [];
-      var matchIdx = -queryLen;
-      while (true) {
-        matchIdx = pageContent.indexOf(query, matchIdx + queryLen);
-        if (matchIdx === -1) {
-          break;
-        }
-        matches.push(matchIdx);
+      if (phraseSearch) {
+        addMatches(query);
+      } else {
+        matchesWithLength = [];
+        var queryArray = query.split(DIVIDER_TERMS);
+        queryArray.forEach(addMatches);
+        this.clearMatches(matchesWithLength, matches, matchesLength);
       }
+
       this.pageMatches[pageIndex] = matches;
+      this.pageMatchesLength[pageIndex] = matchesLength;
       this.updatePage(pageIndex);
       if (this.resumePageIdx === pageIndex) {
         this.resumePageIdx = null;
@@ -229,6 +290,7 @@ var PDFFindController = (function PDFFindControllerClosure() {
         this.hadMatch = false;
         this.resumePageIdx = null;
         this.pageMatches = [];
+        this.pageMatchesLength = [];
         var self = this;
 
         for (var i = 0; i < numPages; i++) {
