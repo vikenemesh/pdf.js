@@ -1136,6 +1136,9 @@ var PDFViewerApplication = {
         if ('phrase' in params) {
           this.findBar.phraseSearch.checked = (params['phrase'] === 'true');
         }
+        if ('highlight' in params) {
+          this.findBar.highlightAll.checked = (params['highlight'] === 'true');
+        }
         if ('search' in params) {
           this.findBar.open();
           this.findBar.findField.value = params['search'];
